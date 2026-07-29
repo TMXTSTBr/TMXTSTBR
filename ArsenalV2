@@ -1,0 +1,989 @@
+--[[
+    Arsenal Cheat - Simple
+    Anti-Recoil • Aimbot • ESP • Team Check
+]]
+
+local UIS = game:GetService("UserInputService")
+local RS  = game:GetService("RunService")
+local TS  = game:GetService("TweenService")
+local PL  = game:GetService("Players")
+local CAM = workspace.CurrentCamera
+local LP  = PL.LocalPlayer
+
+-- ══════════════════════════════════════
+--  CONFIG
+-- ══════════════════════════════════════
+local CFG = {
+    -- Aimbot
+    AimOn      = false,
+    Part       = "Head",
+    FOV        = 160,
+    Smooth     = 0.10,
+    TeamCheck  = true,
+
+    -- Anti-Recoil
+    RecoilOn   = false,
+    RecoilY    = 12,
+
+    -- ESP
+    ESPOn      = false,
+    BoxOn      = false,
+    NameOn     = false,
+    DistOn     = false,
+    HealthOn   = false,
+    ChamsOn    = false,
+    TeamESP    = true, -- não mostrar ESP em teammates
+
+    -- Cores
+    C_BG       = Color3.fromRGB(8,  8,  12),
+    C_PANEL    = Color3.fromRGB(14, 14, 20),
+    C_CARD     = Color3.fromRGB(20, 20, 28),
+    C_ACCENT   = Color3.fromRGB(150, 50, 255),
+    C_BORDER   = Color3.fromRGB(90,  0, 170),
+    C_TEXT     = Color3.fromRGB(220, 220, 230),
+    C_SUB      = Color3.fromRGB(110, 110, 135),
+    C_ON       = Color3.fromRGB(120, 40,  220),
+    C_OFF      = Color3.fromRGB(30,  30,  45),
+    C_GREEN    = Color3.fromRGB(60,  220, 100),
+    C_RED      = Color3.fromRGB(255, 55,  55),
+    C_YELLOW   = Color3.fromRGB(255, 205, 50),
+    C_ENEMY    = Color3.fromRGB(255, 55,  55),
+    C_TEAM     = Color3.fromRGB(50,  180, 255),
+}
+
+-- ══════════════════════════════════════
+--  STATE
+-- ══════════════════════════════════════
+local ST = {
+    Target   = nil,
+    Locked   = false,
+    ESPData  = {},
+    FOVFrame = nil,
+    FOVStk   = nil,
+    Shooting = false,
+    RConn    = nil,
+    FPS      = 0,
+    FPSBuf   = {},
+}
+
+-- ══════════════════════════════════════
+--  ARSENAL UTILS
+-- ══════════════════════════════════════
+
+-- Arsenal usa times via "Team" no Player
+local function getTeam(p)
+    return p and p.Team
+end
+
+local function isTeammate(p)
+    if not CFG.TeamCheck then return false end
+    local mt = getTeam(LP)
+    local pt = getTeam(p)
+    if mt and pt and mt == pt then return true end
+    return false
+end
+
+local function isAlive(char)
+    if not char then return false end
+    local h = char:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function getVel(char)
+    local r = char and char:FindFirstChild("HumanoidRootPart")
+    return (r and r:IsA("BasePart")) and r.AssemblyLinearVelocity or Vector3.zero
+end
+
+-- Cor baseada em team
+local function espColor(p)
+    if isTeammate(p) then return CFG.C_TEAM end
+    return CFG.C_ENEMY
+end
+
+-- ══════════════════════════════════════
+--  FPS
+-- ══════════════════════════════════════
+local lastT = tick()
+RS.Heartbeat:Connect(function()
+    local now = tick()
+    local dt  = now - lastT
+    lastT     = now
+    table.insert(ST.FPSBuf, 1/math.max(dt, 0.001))
+    if #ST.FPSBuf > 20 then table.remove(ST.FPSBuf, 1) end
+    local s = 0
+    for _, v in ipairs(ST.FPSBuf) do s += v end
+    ST.FPS = math.floor(s / #ST.FPSBuf)
+end)
+
+-- ══════════════════════════════════════
+--  AIMBOT
+-- ══════════════════════════════════════
+local function getTarget()
+    local best, bestD = nil, CFG.FOV
+    local center = CAM.ViewportSize / 2
+
+    for _, p in ipairs(PL:GetPlayers()) do
+        if p == LP then continue end
+        if isTeammate(p) then continue end -- Team check
+
+        local c = p.Character
+        if not isAlive(c) then continue end
+
+        local part = c:FindFirstChild(CFG.Part)
+            or c:FindFirstChild("UpperTorso")
+            or c:FindFirstChild("HumanoidRootPart")
+        if not part then continue end
+
+        local sp, on = CAM:WorldToViewportPoint(part.Position)
+        if not on then continue end
+
+        local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+        if d >= bestD then continue end
+
+        best  = {part = part, char = c, player = p}
+        bestD = d
+    end
+    return best
+end
+
+local function aimUpdate()
+    if not CFG.AimOn then
+        ST.Target = nil
+        ST.Locked = false
+        return
+    end
+
+    local t = getTarget()
+    ST.Target = t
+    ST.Locked = t ~= nil
+
+    if t then
+        local goal = CFrame.new(CAM.CFrame.Position, t.part.Position)
+        CAM.CFrame = CAM.CFrame:Lerp(goal, 1 - CFG.Smooth)
+    end
+end
+
+-- ══════════════════════════════════════
+--  ANTI-RECOIL
+-- ══════════════════════════════════════
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+    or i.UserInputType == Enum.UserInputType.Touch then
+        ST.Shooting = true
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+    or i.UserInputType == Enum.UserInputType.Touch then
+        ST.Shooting = false
+    end
+end)
+
+local function startRecoil()
+    if ST.RConn then ST.RConn:Disconnect() end
+    ST.RConn = RS.RenderStepped:Connect(function()
+        if CFG.RecoilOn and ST.Shooting then
+            CAM.CFrame = CAM.CFrame * CFrame.fromEulerAnglesXYZ(
+                -math.rad(CFG.RecoilY * 0.016), 0, 0
+            )
+        end
+    end)
+end
+
+local function stopRecoil()
+    if ST.RConn then ST.RConn:Disconnect(); ST.RConn = nil end
+end
+
+-- ══════════════════════════════════════
+--  ESP
+-- ══════════════════════════════════════
+local SG -- declarado depois
+
+local ESP = {}
+
+function ESP.remove(p)
+    local d = ST.ESPData[p]
+    if not d then return end
+    pcall(function()
+        if d.hl  then d.hl:Destroy()  end
+        if d.bb  then d.bb:Destroy()  end
+        if d.box then d.box:Destroy() end
+        if d.hbf then d.hbf:Destroy() end
+    end)
+    ST.ESPData[p] = nil
+end
+
+function ESP.add(p)
+    ESP.remove(p)
+
+    local function build(char)
+        if not char then return end
+        task.wait(0.4)
+        if not char.Parent then return end
+        if ST.ESPData[p] then ESP.remove(p) end
+
+        local d = {}
+        ST.ESPData[p] = d
+
+        -- Highlight / Chams
+        local hl = Instance.new("Highlight")
+        hl.FillTransparency    = 0.82
+        hl.OutlineTransparency = 0.08
+        hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Enabled             = CFG.ChamsOn
+        hl.Parent              = char
+        d.hl                   = hl
+
+        -- Billboard (nome + dist)
+        local head = char:FindFirstChild("Head")
+        if head then
+            local bb = Instance.new("BillboardGui")
+            bb.Size        = UDim2.new(0, 120, 0, 38)
+            bb.StudsOffset = Vector3.new(0, 2.5, 0)
+            bb.AlwaysOnTop = true
+            bb.Parent      = head
+            d.bb           = bb
+
+            local nl = Instance.new("TextLabel")
+            nl.Name                   = "NL"
+            nl.Size                   = UDim2.new(1, 0, 0.55, 0)
+            nl.BackgroundTransparency = 1
+            nl.Font                   = Enum.Font.GothamBold
+            nl.TextSize               = 12
+            nl.TextStrokeTransparency = 0.3
+            nl.Visible                = CFG.NameOn
+            nl.Parent                 = bb
+
+            local dl = Instance.new("TextLabel")
+            dl.Name                   = "DL"
+            dl.Size                   = UDim2.new(1, 0, 0.45, 0)
+            dl.Position               = UDim2.new(0, 0, 0.55, 0)
+            dl.BackgroundTransparency = 1
+            dl.Font                   = Enum.Font.Gotham
+            dl.TextSize               = 10
+            dl.TextStrokeTransparency = 0.4
+            dl.Visible                = CFG.DistOn
+            dl.Parent                 = bb
+        end
+
+        -- Box 2D
+        local boxF = Instance.new("Frame")
+        boxF.BackgroundTransparency = 1
+        boxF.BorderSizePixel        = 0
+        boxF.ZIndex                 = 10
+        boxF.Visible                = false
+        boxF.Parent                 = SG
+        d.box      = boxF
+        d.boxSides = {}
+        for i = 1, 4 do
+            local s = Instance.new("Frame")
+            s.BorderSizePixel = 0
+            s.ZIndex          = 10
+            s.Parent          = boxF
+            d.boxSides[i]     = s
+        end
+
+        -- Health bar
+        local hbf = Instance.new("Frame")
+        hbf.BackgroundColor3       = Color3.fromRGB(15, 15, 15)
+        hbf.BackgroundTransparency = 0.3
+        hbf.BorderSizePixel        = 0
+        hbf.ZIndex                 = 11
+        hbf.Visible                = false
+        hbf.Parent                 = SG
+        d.hbf = hbf
+
+        local hbFill = Instance.new("Frame")
+        hbFill.BorderSizePixel = 0
+        hbFill.ZIndex          = 12
+        hbFill.Parent          = hbf
+        d.hbFill               = hbFill
+
+        -- Loop ESP
+        task.spawn(function()
+            while ST.ESPData[p] == d and char.Parent and CFG.ESPOn do
+                local root = char:FindFirstChild("HumanoidRootPart")
+                local hum  = char:FindFirstChildOfClass("Humanoid")
+                local myR  = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+                if not root or not hum then task.wait(0.05); continue end
+
+                -- Cor baseada em team
+                local col = espColor(p)
+                if ST.Target and ST.Target.player == p then col = CFG.C_YELLOW end
+                if hum.Health <= 0 then col = CFG.C_RED end
+
+                -- Não mostrar ESP em teammates se TeamESP ativo
+                local hide = CFG.TeamESP and isTeammate(p)
+
+                d.hl.Enabled      = CFG.ChamsOn and not hide
+                d.hl.OutlineColor = col
+                d.hl.FillColor    = col
+
+                -- Nome e distância
+                if d.bb then
+                    local nl = d.bb:FindFirstChild("NL")
+                    local dl = d.bb:FindFirstChild("DL")
+                    if nl then
+                        nl.Text       = p.Name
+                        nl.TextColor3 = col
+                        nl.Visible    = CFG.NameOn and not hide
+                    end
+                    if dl then
+                        dl.Visible = CFG.DistOn and not hide
+                        if CFG.DistOn and myR and not hide then
+                            local dist = math.floor((root.Position - myR.Position).Magnitude)
+                            dl.Text       = dist .. "m"
+                            dl.TextColor3 = col
+                        end
+                    end
+                end
+
+                -- Bounding box
+                local pts = {
+                    "Head","UpperTorso","LowerTorso",
+                    "LeftHand","RightHand","LeftFoot","RightFoot"
+                }
+                local minX,minY,maxX,maxY = math.huge,math.huge,-math.huge,-math.huge
+                local allOn = true
+                for _, pn in ipairs(pts) do
+                    local pp = char:FindFirstChild(pn)
+                    if pp then
+                        local sp2, on2 = CAM:WorldToViewportPoint(pp.Position)
+                        if not on2 then allOn = false; break end
+                        if sp2.X < minX then minX = sp2.X end
+                        if sp2.Y < minY then minY = sp2.Y end
+                        if sp2.X > maxX then maxX = sp2.X end
+                        if sp2.Y > maxY then maxY = sp2.Y end
+                    end
+                end
+
+                -- Box
+                local showBox = CFG.BoxOn and allOn and not hide
+                d.box.Visible = showBox
+                if showBox then
+                    local pad, t2 = 3, 1.5
+                    local bx = minX - pad; local by = minY - pad
+                    local bw = (maxX - minX) + pad*2
+                    local bh = (maxY - minY) + pad*2
+                    d.box.Position = UDim2.new(0, bx, 0, by)
+                    d.box.Size     = UDim2.new(0, bw, 0, bh)
+                    local s = d.boxSides
+                    s[1].Position=UDim2.new(0,0,0,0);    s[1].Size=UDim2.new(1,0,0,t2); s[1].BackgroundColor3=col
+                    s[2].Position=UDim2.new(0,0,1,-t2);  s[2].Size=UDim2.new(1,0,0,t2); s[2].BackgroundColor3=col
+                    s[3].Position=UDim2.new(0,0,0,0);    s[3].Size=UDim2.new(0,t2,1,0); s[3].BackgroundColor3=col
+                    s[4].Position=UDim2.new(1,-t2,0,0);  s[4].Size=UDim2.new(0,t2,1,0); s[4].BackgroundColor3=col
+                end
+
+                -- Health bar
+                local showHP = CFG.HealthOn and allOn and not hide
+                d.hbf.Visible = showHP
+                if showHP then
+                    local hp = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+                    d.hbf.Position      = UDim2.new(0, minX - 7, 0, minY)
+                    d.hbf.Size          = UDim2.new(0, 4, 0, maxY - minY)
+                    d.hbFill.Size       = UDim2.new(1, 0, hp, 0)
+                    d.hbFill.Position   = UDim2.new(0, 0, 1 - hp, 0)
+                    d.hbFill.BackgroundColor3 = Color3.fromHSV(hp * 0.33, 1, 1)
+                end
+
+                task.wait(0)
+            end
+            ESP.remove(p)
+        end)
+    end
+
+    if p.Character then build(p.Character) end
+    p.CharacterAdded:Connect(build)
+end
+
+function ESP.enable()
+    ESP.disable()
+    for _, p in ipairs(PL:GetPlayers()) do
+        if p ~= LP then ESP.add(p) end
+    end
+    PL.PlayerAdded:Connect(function(p)
+        if p ~= LP and CFG.ESPOn then ESP.add(p) end
+    end)
+    PL.PlayerRemoving:Connect(ESP.remove)
+end
+
+function ESP.disable()
+    for p in pairs(ST.ESPData) do ESP.remove(p) end
+end
+
+-- ══════════════════════════════════════
+--  SCREEN GUI
+-- ══════════════════════════════════════
+SG = Instance.new("ScreenGui")
+SG.Name           = "ArsenalCHT"
+SG.ResetOnSpawn   = false
+SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+SG.IgnoreGuiInset = true
+SG.Parent         = game:GetService("CoreGui")
+
+-- ══════════════════════════════════════
+--  GUI HELPERS
+-- ══════════════════════════════════════
+local function crn(o, r)
+    Instance.new("UICorner", o).CornerRadius = r or UDim.new(0, 6)
+end
+local function stk(o, c, th, a)
+    local s = Instance.new("UIStroke")
+    s.Color       = c  or CFG.C_BORDER
+    s.Thickness   = th or 1
+    s.Transparency= a  or 0.4
+    s.Parent      = o
+    return s
+end
+local function tw(o, p, t)
+    TS:Create(o, TweenInfo.new(t or 0.18, Enum.EasingStyle.Quart), p):Play()
+end
+
+local function mkLbl(parent, props)
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.BorderSizePixel        = 0
+    for k, v in pairs(props) do
+        if k ~= "P" then l[k] = v end
+    end
+    if props.P then l.Parent = props.P end
+    return l
+end
+
+local function mkBtn(parent, props)
+    local b = Instance.new("TextButton")
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    for k, v in pairs(props) do
+        if k ~= "P" and k ~= "R" then b[k] = v end
+    end
+    if props.R then crn(b, props.R) end
+    if props.P then b.Parent = props.P end
+    return b
+end
+
+-- Switch
+local function mkSwitch(parent, cb)
+    local track = Instance.new("Frame")
+    track.Size             = UDim2.new(0, 40, 0, 22)
+    track.BackgroundColor3 = CFG.C_OFF
+    track.BorderSizePixel  = 0
+    track.Parent           = parent
+    crn(track, UDim.new(1, 0))
+
+    local thumb = Instance.new("Frame")
+    thumb.Size             = UDim2.new(0, 16, 0, 16)
+    thumb.Position         = UDim2.new(0, 3, 0.5, -8)
+    thumb.BackgroundColor3 = Color3.fromRGB(100, 100, 120)
+    thumb.BorderSizePixel  = 0
+    thumb.Parent           = track
+    crn(thumb, UDim.new(1, 0))
+
+    local on = false
+    local function set(v)
+        on = v
+        tw(track, {BackgroundColor3 = on and CFG.C_ON or CFG.C_OFF})
+        tw(thumb, {
+            Position         = on and UDim2.new(0, 20, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
+            BackgroundColor3 = on and Color3.fromRGB(200, 160, 255) or Color3.fromRGB(100, 100, 120),
+        })
+        if cb then cb(on) end
+    end
+
+    local b = mkBtn(track, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text=""})
+    b.MouseButton1Click:Connect(function() set(not on) end)
+    return track, set
+end
+
+-- Slider
+local function mkSlider(parent, label, min, max, default, order, cb)
+    local wrap = Instance.new("Frame")
+    wrap.Size             = UDim2.new(1, 0, 0, 52)
+    wrap.BackgroundColor3 = CFG.C_CARD
+    wrap.BorderSizePixel  = 0
+    wrap.LayoutOrder      = order
+    wrap.Parent           = parent
+    crn(wrap)
+
+    mkLbl(wrap, {
+        Size             = UDim2.new(1, -70, 0, 18),
+        Position         = UDim2.new(0, 10, 0, 5),
+        Text             = label,
+        TextColor3       = CFG.C_TEXT,
+        Font             = Enum.Font.GothamMedium,
+        TextSize         = 11,
+        TextXAlignment   = Enum.TextXAlignment.Left,
+        P                = wrap,
+    })
+
+    local vbox = Instance.new("TextBox")
+    vbox.Size             = UDim2.new(0, 52, 0, 20)
+    vbox.Position         = UDim2.new(1, -60, 0, 4)
+    vbox.BackgroundColor3 = Color3.fromRGB(24, 24, 36)
+    vbox.BorderSizePixel  = 0
+    vbox.Text             = tostring(default)
+    vbox.TextColor3       = CFG.C_ACCENT
+    vbox.Font             = Enum.Font.GothamBold
+    vbox.TextSize         = 11
+    vbox.ClearTextOnFocus = true
+    vbox.Parent           = wrap
+    crn(vbox, UDim.new(0, 4))
+
+    local track = Instance.new("Frame")
+    track.Size             = UDim2.new(1, -20, 0, 5)
+    track.Position         = UDim2.new(0, 10, 0, 36)
+    track.BackgroundColor3 = Color3.fromRGB(28, 28, 42)
+    track.BorderSizePixel  = 0
+    track.Parent           = wrap
+    crn(track, UDim.new(1, 0))
+
+    local fill = Instance.new("Frame")
+    fill.Size             = UDim2.new((default-min)/(max-min), 0, 1, 0)
+    fill.BackgroundColor3 = CFG.C_ACCENT
+    fill.BorderSizePixel  = 0
+    fill.Parent           = track
+    crn(fill, UDim.new(1, 0))
+
+    local knob = Instance.new("Frame")
+    knob.Size         = UDim2.new(0, 14, 0, 14)
+    knob.AnchorPoint  = Vector2.new(0.5, 0.5)
+    knob.Position     = UDim2.new((default-min)/(max-min), 0, 0.5, 0)
+    knob.BackgroundColor3 = Color3.fromRGB(170, 90, 255)
+    knob.BorderSizePixel  = 0
+    knob.ZIndex       = 3
+    knob.Parent       = track
+    crn(knob, UDim.new(1, 0))
+
+    local val  = default
+    local drag = false
+
+    local function upd(v)
+        v   = math.clamp(math.floor(v), min, max)
+        val = v
+        local rel = (v-min)/(max-min)
+        fill.Size     = UDim2.new(rel, 0, 1, 0)
+        knob.Position = UDim2.new(rel, 0, 0.5, 0)
+        vbox.Text     = tostring(v)
+        if cb then cb(v) end
+    end
+    local function fromX(x)
+        local rel = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
+        upd(min + rel*(max-min))
+    end
+
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch
+        or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            drag = true; fromX(i.Position.X)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if not drag then return end
+        if i.UserInputType == Enum.UserInputType.Touch
+        or i.UserInputType == Enum.UserInputType.MouseMovement then fromX(i.Position.X) end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch
+        or i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
+    end)
+    vbox.FocusLost:Connect(function()
+        local n = tonumber(vbox.Text)
+        if n then upd(n) else vbox.Text = tostring(val) end
+    end)
+
+    return wrap
+end
+
+-- Row com switch
+local function mkRow(parent, lbl, order, cb)
+    local row = Instance.new("Frame")
+    row.Size             = UDim2.new(1, 0, 0, 36)
+    row.BackgroundColor3 = CFG.C_CARD
+    row.BorderSizePixel  = 0
+    row.LayoutOrder      = order
+    row.Parent           = parent
+    crn(row)
+
+    mkLbl(row, {
+        Size           = UDim2.new(1, -56, 1, 0),
+        Position       = UDim2.new(0, 12, 0, 0),
+        Text           = lbl,
+        TextColor3     = CFG.C_TEXT,
+        Font           = Enum.Font.GothamMedium,
+        TextSize       = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        P              = row,
+    })
+
+    local sw, fn = mkSwitch(row, cb)
+    sw.Position = UDim2.new(1, -48, 0.5, -11)
+    return row, fn
+end
+
+local function mkSep(parent, order)
+    local f = Instance.new("Frame")
+    f.Size             = UDim2.new(1, 0, 0, 1)
+    f.BackgroundColor3 = Color3.fromRGB(30, 30, 46)
+    f.BorderSizePixel  = 0
+    f.LayoutOrder      = order
+    f.Parent           = parent
+    return f
+end
+
+local function mkSec(parent, txt, order)
+    local f = Instance.new("Frame")
+    f.Size             = UDim2.new(1, 0, 0, 18)
+    f.BackgroundTransparency = 1
+    f.LayoutOrder      = order
+    f.Parent           = parent
+    mkLbl(f, {
+        Size           = UDim2.new(1, 0, 1, 0),
+        Text           = txt,
+        TextColor3     = CFG.C_ACCENT,
+        Font           = Enum.Font.GothamBold,
+        TextSize        = 10,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        P              = f,
+    })
+    return f
+end
+
+-- Big toggle button
+local function mkBigBtn(parent, text, order, onCb, offCb)
+    local b = mkBtn(parent, {
+        Size             = UDim2.new(1, 0, 0, 40),
+        BackgroundColor3 = Color3.fromRGB(22, 10, 40),
+        Text             = text .. "  ·  OFF",
+        TextColor3       = CFG.C_SUB,
+        Font             = Enum.Font.GothamBlack,
+        TextSize         = 13,
+        LayoutOrder      = order,
+        R                = UDim.new(0, 6),
+        P                = parent,
+    })
+    stk(b, CFG.C_BORDER, 1, 0.4)
+
+    local isOn = false
+    b.MouseButton1Click:Connect(function()
+        isOn = not isOn
+        if isOn then
+            tw(b, {BackgroundColor3 = Color3.fromRGB(55, 15, 95)})
+            b.TextColor3 = CFG.C_ACCENT
+            b.Text       = text .. "  ·  ON"
+            if onCb then onCb() end
+        else
+            tw(b, {BackgroundColor3 = Color3.fromRGB(22, 10, 40)})
+            b.TextColor3 = CFG.C_SUB
+            b.Text       = text .. "  ·  OFF"
+            if offCb then offCb() end
+        end
+    end)
+    return b
+end
+
+-- ══════════════════════════════════════
+--  PAINEL
+-- ══════════════════════════════════════
+local PW, PH = 255, 70 -- começa só com header
+
+local panel = Instance.new("Frame")
+panel.Name             = "ArsenalPanel"
+panel.Size             = UDim2.new(0, PW, 0, PH)
+panel.Position         = UDim2.new(0, 8, 0, 8)
+panel.BackgroundColor3 = CFG.C_BG
+panel.BorderSizePixel  = 0
+panel.ClipsDescendants = true
+panel.Parent           = SG
+crn(panel, UDim.new(0, 9))
+stk(panel, CFG.C_BORDER, 1, 0.25)
+
+-- ──────────────────────────────────────
+--  HEADER
+-- ──────────────────────────────────────
+local header = Instance.new("Frame")
+header.Size             = UDim2.new(1, 0, 0, 46)
+header.BackgroundColor3 = CFG.C_PANEL
+header.BorderSizePixel  = 0
+header.Parent           = panel
+crn(header, UDim.new(0, 9))
+
+local hfix = Instance.new("Frame")
+hfix.Size             = UDim2.new(1, 0, 0.5, 0)
+hfix.Position         = UDim2.new(0, 0, 0.5, 0)
+hfix.BackgroundColor3 = CFG.C_PANEL
+hfix.BorderSizePixel  = 0
+hfix.Parent           = header
+
+-- Ícone
+local iconF = Instance.new("Frame")
+iconF.Size             = UDim2.new(0, 28, 0, 28)
+iconF.Position         = UDim2.new(0, 9, 0.5, -14)
+iconF.BackgroundColor3 = CFG.C_ACCENT
+iconF.BorderSizePixel  = 0
+iconF.Parent           = header
+crn(iconF, UDim.new(0, 6))
+mkLbl(iconF, {Size=UDim2.new(1,0,1,0), Text="◉", TextColor3=Color3.fromRGB(255,255,255),
+    Font=Enum.Font.GothamBlack, TextSize=14, P=iconF})
+
+-- Título
+mkLbl(header, {
+    Size=UDim2.new(0,110,0,16), Position=UDim2.new(0,44,0,7),
+    Text="Arsenal", TextColor3=Color3.fromRGB(230,230,255),
+    Font=Enum.Font.GothamBlack, TextSize=14,
+    TextXAlignment=Enum.TextXAlignment.Left, P=header,
+})
+mkLbl(header, {
+    Size=UDim2.new(0,120,0,13), Position=UDim2.new(0,44,0,24),
+    Text="Simple Cheat", TextColor3=CFG.C_SUB,
+    Font=Enum.Font.Gotham, TextSize=9,
+    TextXAlignment=Enum.TextXAlignment.Left, P=header,
+})
+
+-- FPS
+local fpsLbl = mkLbl(header, {
+    Size=UDim2.new(0,50,0,14), Position=UDim2.new(1,-100,0,8),
+    Text="FPS: --", TextColor3=CFG.C_GREEN,
+    Font=Enum.Font.GothamBold, TextSize=10,
+    TextXAlignment=Enum.TextXAlignment.Right, P=header,
+})
+
+-- Botão minimizar (toggle)
+local expanded = false
+
+local expandBtn = mkBtn(header, {
+    Size=UDim2.new(0,28,0,28), Position=UDim2.new(1,-34,0.5,-14),
+    BackgroundColor3=Color3.fromRGB(35,15,60),
+    Text="▼", TextColor3=CFG.C_SUB,
+    Font=Enum.Font.GothamBold, TextSize=11,
+    R=UDim.new(0,6), P=header,
+})
+
+-- ──────────────────────────────────────
+--  CONTEÚDO (escondido até expandir)
+-- ──────────────────────────────────────
+local content = Instance.new("ScrollingFrame")
+content.Size                 = UDim2.new(1, 0, 1, -46)
+content.Position             = UDim2.new(0, 0, 0, 46)
+content.BackgroundTransparency = 1
+content.BorderSizePixel      = 0
+content.ScrollBarThickness   = 2
+content.ScrollBarImageColor3 = CFG.C_ACCENT
+content.CanvasSize           = UDim2.new(0, 0, 0, 0)
+content.AutomaticCanvasSize  = Enum.AutomaticSize.Y
+content.Visible              = false
+content.Parent               = panel
+
+local lay = Instance.new("UIListLayout")
+lay.SortOrder = Enum.SortOrder.LayoutOrder
+lay.Padding   = UDim.new(0, 4)
+lay.Parent    = content
+
+local pad = Instance.new("UIPadding")
+pad.PaddingLeft   = UDim.new(0, 8)
+pad.PaddingRight  = UDim.new(0, 8)
+pad.PaddingTop    = UDim.new(0, 8)
+pad.PaddingBottom = UDim.new(0, 8)
+pad.Parent        = content
+
+-- ──────────────────────────────────────
+--  ABRIR / FECHAR CONTEÚDO
+-- ──────────────────────────────────────
+local FULL_H = 460
+
+expandBtn.MouseButton1Click:Connect(function()
+    expanded = not expanded
+    if expanded then
+        content.Visible = true
+        expandBtn.Text  = "▲"
+        tw(panel, {Size = UDim2.new(0, PW, 0, FULL_H)}, 0.3)
+    else
+        expandBtn.Text = "▼"
+        tw(panel, {Size = UDim2.new(0, PW, 0, PH)}, 0.25)
+        task.delay(0.26, function()
+            if not expanded then content.Visible = false end
+        end)
+    end
+end)
+
+-- ══════════════════════════════════════
+--  PREENCHER CONTEÚDO
+-- ══════════════════════════════════════
+
+-- AIMBOT
+mkSec(content, "  AIMBOT", 1)
+mkBigBtn(content, "Aimbot", 2,
+    function()
+        CFG.AimOn = true
+        -- FOV circle
+        if ST.FOVFrame then ST.FOVFrame:Destroy() end
+        local s = CFG.FOV * 2
+        local fr = Instance.new("Frame")
+        fr.Size=UDim2.new(0,s,0,s); fr.Position=UDim2.new(0.5,-s/2,0.5,-s/2)
+        fr.BackgroundTransparency=1; fr.BorderSizePixel=0; fr.ZIndex=20; fr.Parent=SG
+        local inn=Instance.new("Frame"); inn.Size=UDim2.new(1,0,1,0)
+        inn.BackgroundTransparency=1; inn.BorderSizePixel=0; inn.Parent=fr
+        Instance.new("UICorner",inn).CornerRadius=UDim.new(1,0)
+        local fstk=Instance.new("UIStroke"); fstk.Color=CFG.C_ACCENT
+        fstk.Thickness=1.2; fstk.Transparency=0.15
+        fstk.ApplyStrokeMode=Enum.ApplyStrokeMode.Border; fstk.Parent=inn
+        ST.FOVFrame=fr; ST.FOVStk=fstk
+    end,
+    function()
+        CFG.AimOn = false
+        if ST.FOVFrame then ST.FOVFrame:Destroy(); ST.FOVFrame=nil end
+    end
+)
+
+mkRow(content, "Atirar na Cabeça", 3, function(e)
+    CFG.Part = e and "Head" or "HumanoidRootPart"
+end)
+mkRow(content, "Team Check (não mirar aliados)", 4, function(e)
+    CFG.TeamCheck = e
+end)
+
+mkSlider(content, "FOV", 50, 400, 160, 5, function(v)
+    CFG.FOV = v
+    if ST.FOVFrame then
+        local s = v*2
+        ST.FOVFrame.Size     = UDim2.new(0,s,0,s)
+        ST.FOVFrame.Position = UDim2.new(0.5,-s/2,0.5,-s/2)
+    end
+end)
+mkSlider(content, "Suavização %", 0, 95, 10, 6, function(v)
+    CFG.Smooth = v / 100
+end)
+
+mkSep(content, 7)
+
+-- ANTI-RECOIL
+mkSec(content, "  ANTI-RECOIL", 8)
+mkBigBtn(content, "Anti-Recoil", 9,
+    function() CFG.RecoilOn=true;  startRecoil() end,
+    function() CFG.RecoilOn=false; stopRecoil()  end
+)
+mkSlider(content, "Recoil Vertical", 0, 30, 12, 10, function(v)
+    CFG.RecoilY = v
+end)
+
+mkSep(content, 11)
+
+-- ESP
+mkSec(content, "  ESP", 12)
+mkBigBtn(content, "ESP", 13,
+    function() CFG.ESPOn=true;  ESP.enable()  end,
+    function() CFG.ESPOn=false; ESP.disable() end
+)
+
+mkRow(content, "Chams (Highlight)", 14, function(e)
+    CFG.ChamsOn = e
+    for _, d in pairs(ST.ESPData) do if d.hl then d.hl.Enabled=e end end
+end)
+mkRow(content, "Box 2D", 15, function(e)
+    CFG.BoxOn = e
+    for _, d in pairs(ST.ESPData) do if d.box then d.box.Visible=e end end
+end)
+mkRow(content, "Barra de Vida", 16, function(e)
+    CFG.HealthOn = e
+    for _, d in pairs(ST.ESPData) do if d.hbf then d.hbf.Visible=e end end
+end)
+mkRow(content, "Nome", 17, function(e)
+    CFG.NameOn = e
+    for _, d in pairs(ST.ESPData) do
+        if d.bb then local nl=d.bb:FindFirstChild("NL"); if nl then nl.Visible=e end end
+    end
+end)
+mkRow(content, "Distância", 18, function(e)
+    CFG.DistOn = e
+    for _, d in pairs(ST.ESPData) do
+        if d.bb then local dl=d.bb:FindFirstChild("DL"); if dl then dl.Visible=e end end
+    end
+end)
+mkRow(content, "Esconder Team no ESP", 19, function(e)
+    CFG.TeamESP = e
+end)
+
+mkSep(content, 20)
+
+-- INFO
+mkSec(content, "  INFORMAÇÃO", 21)
+local infoF = Instance.new("Frame")
+infoF.Size             = UDim2.new(1, 0, 0, 52)
+infoF.BackgroundColor3 = CFG.C_CARD
+infoF.BorderSizePixel  = 0
+infoF.LayoutOrder      = 22
+infoF.Parent           = content
+crn(infoF)
+mkLbl(infoF, {
+    Size=UDim2.new(1,-16,1,0), Position=UDim2.new(0,8,0,0),
+    Text="Arsenal  •  PlaceId: 189707\nTeam Check • Anti-Recoil • Box ESP\nNome • HP Bar • Chams",
+    TextColor3=CFG.C_SUB, Font=Enum.Font.Gotham, TextSize=9,
+    TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left,
+    TextYAlignment=Enum.TextYAlignment.Center, P=infoF,
+})
+
+-- ══════════════════════════════════════
+--  DRAG TOUCH + MOUSE
+-- ══════════════════════════════════════
+do
+    local drag=false; local tid=nil; local si=nil; local sp=nil
+
+    header.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.Touch and not tid then
+            tid=i; drag=true
+            si=Vector2.new(i.Position.X,i.Position.Y); sp=panel.Position
+        elseif i.UserInputType==Enum.UserInputType.MouseButton1 then
+            drag=true
+            si=Vector2.new(i.Position.X,i.Position.Y); sp=panel.Position
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if not drag then return end
+        local pos
+        if i.UserInputType==Enum.UserInputType.Touch and i==tid then
+            pos=Vector2.new(i.Position.X,i.Position.Y)
+        elseif i.UserInputType==Enum.UserInputType.MouseMovement then
+            pos=Vector2.new(i.Position.X,i.Position.Y)
+        end
+        if pos then
+            local d=pos-si
+            panel.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y)
+        end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if (i.UserInputType==Enum.UserInputType.Touch and i==tid)
+        or i.UserInputType==Enum.UserInputType.MouseButton1 then
+            drag=false; tid=nil
+        end
+    end)
+end
+
+-- ══════════════════════════════════════
+--  ANIMAÇÃO ENTRADA
+-- ══════════════════════════════════════
+panel.BackgroundTransparency = 1
+panel.Position = UDim2.new(0, -20, 0, 8)
+task.wait(0.1)
+tw(panel, {BackgroundTransparency=0, Position=UDim2.new(0,8,0,8)}, 0.35)
+
+-- ══════════════════════════════════════
+--  LOOPS
+-- ══════════════════════════════════════
+RS:BindToRenderStep("ArsenalAim", 300, aimUpdate)
+
+RS.Heartbeat:Connect(function()
+    -- Atualizar FPS label
+    local fps = ST.FPS
+    fpsLbl.Text       = "FPS: "..fps
+    fpsLbl.TextColor3 = fps < 30 and CFG.C_RED or fps < 50 and CFG.C_YELLOW or CFG.C_GREEN
+
+    -- Pulso FOV quando travado
+    if ST.FOVStk then
+        ST.FOVStk.Transparency = ST.Locked
+            and math.max(0, 0.1 - math.abs(math.sin(tick()*5))*0.08)
+            or 0.15
+    end
+end)
+
+print("✅ Arsenal Cheat carregado!")
+print("   Clique em ▼ para expandir o painel")
