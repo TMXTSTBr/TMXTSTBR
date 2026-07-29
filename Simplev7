@@ -1,0 +1,1316 @@
+--[[
+    Simple Aim V6 - MOBILE + FPS + GAME DETECTION
+    Touch • Aimbot • ESP • FPS Boost • Anti-Recoil
+]]
+
+local UIS    = game:GetService("UserInputService")
+local RS     = game:GetService("RunService")
+local TS     = game:GetService("TweenService")
+local PL     = game:GetService("Players")
+local SL     = game:GetService("StarterGui")
+local LIGHT  = game:GetService("Lighting")
+local CAM    = workspace.CurrentCamera
+local LP     = PL.LocalPlayer
+
+-- ══════════════════════════════════════
+--  DETECT GAME
+-- ══════════════════════════════════════
+local GAME_DB = {
+    -- PlaceId = { name, hasRecoil, hasBulletDrop }
+    [292439477]  = {name="Phantom Forces",    recoil=true,  drop=true },
+    [189707]     = {name="Arsenal",           recoil=true,  drop=false},
+    [6872265039] = {name="Bad Business",      recoil=true,  drop=false},
+    [3260590327] = {name="Island Royale",     recoil=true,  drop=true },
+    [2788229376] = {name="Criminality",       recoil=true,  drop=false},
+    [4924922222] = {name="Strucid",           recoil=false, drop=false},
+    [1271744264] = {name="Counter Blox",      recoil=true,  drop=false},
+    [3121674804] = {name="DOORS",             recoil=false, drop=false},
+    [301549746]  = {name="Jailbreak",         recoil=false, drop=false},
+    [606849621]  = {name="Mad City",          recoil=false, drop=false},
+}
+
+local pid      = game.PlaceId
+local GAME_CFG = GAME_DB[pid] or {name="Desconhecido", recoil=false, drop=false}
+
+-- ══════════════════════════════════════
+--  CONFIG
+-- ══════════════════════════════════════
+local CFG = {
+    -- Aimbot
+    AimOn        = false,
+    Part         = "HumanoidRootPart",
+    FOV          = 180,
+    Smooth       = 0.20,
+    Predict      = false,
+    PredMult     = 0.08,
+    WallCheck    = false,
+    ScopeOnly    = false,
+    LegitMode    = false,
+    HitChance    = 75,
+    ShowFOV      = true,
+    FOVColor     = Color3.fromRGB(160,60,255),
+    FOVAlpha     = 0.15,
+
+    -- Anti-Recoil
+    RecoilOn     = false,
+    RecoilY      = 8,
+    RecoilX      = 0,
+
+    -- Bullet Drop
+    DropOn       = false,
+    DropAmount   = 5,
+
+    -- ESP
+    ESPOn        = false,
+    BoxOn        = false,
+    SkeleOn      = false,
+    HealthOn     = false,
+    NameOn       = false,
+    DistOn       = false,
+    TracerOn     = false,
+    ChamsOn      = false,
+
+    -- FPS Boost
+    FPSBoostOn   = false,
+    FPSCap       = 60,
+    FPSLevel     = 1, -- 1=Leve 2=Médio 3=Máximo
+
+    -- Cores
+    C_BG         = Color3.fromRGB(10,10,14),
+    C_PANEL      = Color3.fromRGB(16,16,22),
+    C_CARD       = Color3.fromRGB(22,22,30),
+    C_BORDER     = Color3.fromRGB(100,0,180),
+    C_ACCENT     = Color3.fromRGB(160,60,255),
+    C_TEXT       = Color3.fromRGB(220,220,230),
+    C_SUBTEXT    = Color3.fromRGB(120,120,145),
+    C_ON         = Color3.fromRGB(130,50,230),
+    C_OFF        = Color3.fromRGB(35,35,50),
+    C_RED        = Color3.fromRGB(255,60,60),
+    C_GREEN      = Color3.fromRGB(80,220,110),
+    C_YELLOW     = Color3.fromRGB(255,210,50),
+    C_ORANGE     = Color3.fromRGB(255,140,30),
+}
+
+-- ══════════════════════════════════════
+--  STATE
+-- ══════════════════════════════════════
+local ST = {
+    Target    = nil,
+    Locked    = false,
+    HitTick   = 0,
+    ESPData   = {},
+    FOVFrame  = nil,
+    FOVStroke = nil,
+    Tab       = "AIM",
+    FPS       = 0,
+    FPSList   = {},
+    OrigEnv   = {}, -- guarda configurações originais p/ restaurar
+    Shooting  = false,
+}
+
+-- ══════════════════════════════════════
+--  FPS COUNTER
+-- ══════════════════════════════════════
+local fpsLabel -- declarado depois
+
+local lastTick = tick()
+RS.Heartbeat:Connect(function()
+    local now  = tick()
+    local dt   = now - lastTick
+    lastTick   = now
+
+    table.insert(ST.FPSList, 1/dt)
+    if #ST.FPSList > 20 then table.remove(ST.FPSList) end
+
+    local sum = 0
+    for _, v in ipairs(ST.FPSList) do sum += v end
+    ST.FPS = math.floor(sum / #ST.FPSList)
+
+    if fpsLabel then
+        local fps  = ST.FPS
+        local col  = CFG.C_GREEN
+        if fps < 30 then col = CFG.C_RED
+        elseif fps < 50 then col = CFG.C_YELLOW end
+        fpsLabel.Text      = "FPS: "..fps
+        fpsLabel.TextColor3 = col
+    end
+end)
+
+-- ══════════════════════════════════════
+--  FPS BOOST
+-- ══════════════════════════════════════
+local FPSBoost = {}
+
+-- Salvar estado original
+local function saveEnv()
+    ST.OrigEnv = {
+        shadow         = LIGHT.GlobalShadows,
+        brightness     = LIGHT.Brightness,
+        fogEnd         = LIGHT.FogEnd,
+        fogStart       = LIGHT.FogStart,
+        quality        = settings().Rendering.QualityLevel,
+        particles      = {},
+        decals         = {},
+        textures       = {},
+        sounds         = {},
+    }
+    -- Partículas, decals, texturas
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") then
+            ST.OrigEnv.particles[obj] = obj.Enabled
+        elseif obj:IsA("Decal") or obj:IsA("Texture") then
+            ST.OrigEnv.decals[obj] = obj.Transparency
+        elseif obj:IsA("SpecialMesh") then
+            ST.OrigEnv.textures[obj] = obj.TextureId
+        end
+    end
+end
+
+function FPSBoost.apply(level)
+    saveEnv()
+
+    -- Nível 1: Leve
+    LIGHT.GlobalShadows = false
+    LIGHT.Brightness    = 1
+    settings().Rendering.QualityLevel = Enum.QualityLevel.Level05
+
+    if level >= 2 then
+        -- Nível 2: Médio
+        LIGHT.FogEnd   = 1000
+        LIGHT.FogStart = 900
+
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ParticleEmitter") then
+                obj.Enabled = false
+            elseif obj:IsA("Decal") then
+                obj.Transparency = 1
+            end
+        end
+
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level03
+    end
+
+    if level >= 3 then
+        -- Nível 3: Máximo
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("SpecialMesh") then
+                obj.TextureId = ""
+            elseif obj:IsA("Texture") then
+                obj.Transparency = 1
+            elseif obj:IsA("Sound") then
+                obj.Volume = 0
+            end
+        end
+
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+
+        -- Remover sombras e reflexos
+        LIGHT.GlobalShadows   = false
+        LIGHT.EnvironmentDiffuseScale = 0
+        LIGHT.EnvironmentSpecularScale = 0
+    end
+
+    -- FPS Cap
+    settings().Rendering.FrameRateManager = Enum.FrameRateManagerMode.On
+end
+
+function FPSBoost.restore()
+    pcall(function()
+        LIGHT.GlobalShadows = ST.OrigEnv.shadow
+        LIGHT.Brightness    = ST.OrigEnv.brightness
+        LIGHT.FogEnd        = ST.OrigEnv.fogEnd
+        LIGHT.FogStart      = ST.OrigEnv.fogStart
+        LIGHT.EnvironmentDiffuseScale  = 1
+        LIGHT.EnvironmentSpecularScale = 1
+        settings().Rendering.QualityLevel = ST.OrigEnv.quality
+
+        for obj, val in pairs(ST.OrigEnv.particles) do
+            if obj and obj.Parent then obj.Enabled = val end
+        end
+        for obj, val in pairs(ST.OrigEnv.decals) do
+            if obj and obj.Parent then obj.Transparency = val end
+        end
+        for obj, val in pairs(ST.OrigEnv.textures) do
+            if obj and obj.Parent then obj.TextureId = val end
+        end
+    end)
+end
+
+-- ══════════════════════════════════════
+--  ANTI-RECOIL
+-- ══════════════════════════════════════
+-- Detecta tiro por botão do mouse / toque
+-- e compensa movendo a câmera
+
+local recoilConn
+
+local function startRecoil()
+    if recoilConn then recoilConn:Disconnect() end
+    recoilConn = RS.RenderStepped:Connect(function()
+        if not CFG.RecoilOn then return end
+        if not ST.Shooting    then return end
+
+        local rx = math.rad(CFG.RecoilY * 0.016)
+        local ry = math.rad(CFG.RecoilX * 0.016)
+
+        CAM.CFrame = CAM.CFrame
+            * CFrame.fromEulerAnglesXYZ(-rx, ry, 0)
+    end)
+end
+
+local function stopRecoil()
+    if recoilConn then recoilConn:Disconnect(); recoilConn = nil end
+end
+
+-- Detectar botão de tiro (Touch e Mouse)
+UIS.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        ST.Shooting = true
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        ST.Shooting = false
+    end
+end)
+
+-- ══════════════════════════════════════
+--  UTILS
+-- ══════════════════════════════════════
+local function alive(char)
+    if not char then return false end
+    local h = char:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function getVel(char)
+    local r = char and char:FindFirstChild("HumanoidRootPart")
+    return (r and r:IsA("BasePart")) and r.AssemblyLinearVelocity or Vector3.zero
+end
+
+local function shouldHit()
+    if not CFG.LegitMode then return true end
+    ST.HitTick += 1
+    return (ST.HitTick % math.max(1, math.floor(100/CFG.HitChance))) == 0
+end
+
+local function wallOk(origin, pos, char)
+    local p = RaycastParams.new()
+    p.FilterType = Enum.RaycastFilterType.Blacklist
+    p.FilterDescendantsInstances = {LP.Character or {}}
+    local r = workspace:Raycast(origin, pos-origin, p)
+    if r then return r.Instance:FindFirstAncestorOfClass("Model") == char end
+    return true
+end
+
+-- ══════════════════════════════════════
+--  AIMBOT
+-- ══════════════════════════════════════
+local function getTarget()
+    local best, bestD = nil, CFG.FOV
+    local center = CAM.ViewportSize/2
+
+    for _, p in ipairs(PL:GetPlayers()) do
+        if p == LP then continue end
+        local c = p.Character
+        if not alive(c) then continue end
+
+        local part = c:FindFirstChild(CFG.Part) or c:FindFirstChild("HumanoidRootPart")
+        if not part then continue end
+
+        local tpos = part.Position
+
+        -- Compensar bullet drop
+        if CFG.DropOn then
+            tpos = tpos + Vector3.new(0, CFG.DropAmount * 0.1, 0)
+        end
+
+        if CFG.Predict then
+            tpos = tpos + getVel(c) * CFG.PredMult
+        end
+
+        local sp, on = CAM:WorldToViewportPoint(tpos)
+        if not on then continue end
+
+        local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+        if d >= bestD then continue end
+
+        if CFG.WallCheck and not wallOk(CAM.CFrame.Position, tpos, c) then continue end
+
+        best  = {part=part, char=c, player=p, pos=tpos}
+        bestD = d
+    end
+    return best
+end
+
+local function aimUpdate()
+    if not CFG.AimOn then ST.Target=nil; ST.Locked=false; return end
+    if CFG.ScopeOnly and CAM.FieldOfView >= 50 then return end
+    if not shouldHit() then return end
+
+    local t = getTarget()
+    ST.Target = t
+    ST.Locked = t ~= nil
+
+    if t then
+        local goal = CFrame.new(CAM.CFrame.Position, t.pos)
+        CAM.CFrame = CAM.CFrame:Lerp(goal, 1-CFG.Smooth)
+    end
+end
+
+-- ══════════════════════════════════════
+--  GUI
+-- ══════════════════════════════════════
+local SG = Instance.new("ScreenGui")
+SG.Name           = "SAimV6"
+SG.ResetOnSpawn   = false
+SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+SG.IgnoreGuiInset = true
+SG.Parent         = game:GetService("CoreGui")
+
+-- ══════════════════════════════════════
+--  FOV (declarado após SG)
+-- ══════════════════════════════════════
+local function makeFOV()
+    if ST.FOVFrame then ST.FOVFrame:Destroy() end
+    local s  = CFG.FOV*2
+    local fr = Instance.new("Frame")
+    fr.Name="FOV"; fr.Size=UDim2.new(0,s,0,s)
+    fr.Position=UDim2.new(0.5,-s/2,0.5,-s/2)
+    fr.BackgroundTransparency=1; fr.BorderSizePixel=0; fr.ZIndex=20; fr.Parent=SG
+    local inner=Instance.new("Frame")
+    inner.Size=UDim2.new(1,0,1,0); inner.BackgroundTransparency=1
+    inner.BorderSizePixel=0; inner.Parent=fr
+    Instance.new("UICorner",inner).CornerRadius=UDim.new(1,0)
+    local st=Instance.new("UIStroke")
+    st.Color=CFG.FOVColor; st.Thickness=1.2; st.Transparency=CFG.FOVAlpha
+    st.ApplyStrokeMode=Enum.ApplyStrokeMode.Border; st.Parent=inner
+    ST.FOVFrame=fr; ST.FOVStroke=st
+end
+
+local function removeFOV()
+    if ST.FOVFrame then ST.FOVFrame:Destroy(); ST.FOVFrame=nil end
+end
+
+local function resizeFOV()
+    if not ST.FOVFrame then return end
+    local s=CFG.FOV*2
+    ST.FOVFrame.Size=UDim2.new(0,s,0,s)
+    ST.FOVFrame.Position=UDim2.new(0.5,-s/2,0.5,-s/2)
+end
+
+-- ══════════════════════════════════════
+--  ESP
+-- ══════════════════════════════════════
+local BONES = {
+    {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
+    {"LowerTorso","LeftUpperLeg"},{"LowerTorso","RightUpperLeg"},
+    {"LeftUpperLeg","LeftLowerLeg"},{"RightUpperLeg","RightLowerLeg"},
+    {"LeftLowerLeg","LeftFoot"},{"RightLowerLeg","RightFoot"},
+    {"UpperTorso","LeftUpperArm"},{"UpperTorso","RightUpperArm"},
+    {"LeftUpperArm","LeftLowerArm"},{"RightUpperArm","RightLowerArm"},
+    {"LeftLowerArm","LeftHand"},{"RightLowerArm","RightHand"},
+}
+
+local ESP = {}
+
+function ESP.remove(p)
+    local d = ST.ESPData[p]; if not d then return end
+    pcall(function()
+        if d.hl  then d.hl:Destroy()  end
+        if d.bb  then d.bb:Destroy()  end
+        if d.box then d.box:Destroy() end
+        if d.hbf then d.hbf:Destroy() end
+        if d.trc then d.trc:Destroy() end
+        for _,b in ipairs(d.bones or {}) do b.line:Destroy() end
+    end)
+    ST.ESPData[p] = nil
+end
+
+function ESP.add(p)
+    ESP.remove(p)
+    local function build(char)
+        if not char then return end
+        task.wait(0.3)
+        if not char.Parent then return end
+        if ST.ESPData[p] then ESP.remove(p) end
+        local d={bones={}}; ST.ESPData[p]=d
+
+        local hl=Instance.new("Highlight")
+        hl.FillTransparency=0.80; hl.OutlineTransparency=0.10
+        hl.OutlineColor=CFG.C_ACCENT; hl.FillColor=CFG.C_ACCENT
+        hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Enabled=CFG.ChamsOn; hl.Parent=char; d.hl=hl
+
+        local head=char:FindFirstChild("Head")
+        if head then
+            local bb=Instance.new("BillboardGui")
+            bb.Size=UDim2.new(0,120,0,36); bb.StudsOffset=Vector3.new(0,2.8,0)
+            bb.AlwaysOnTop=true; bb.Parent=head; d.bb=bb
+
+            local nl=Instance.new("TextLabel")
+            nl.Name="NL"; nl.Size=UDim2.new(1,0,0.55,0)
+            nl.BackgroundTransparency=1; nl.Text=p.Name
+            nl.TextColor3=Color3.fromRGB(255,255,255)
+            nl.TextStrokeTransparency=0.3; nl.Font=Enum.Font.GothamBold
+            nl.TextSize=12; nl.Visible=CFG.NameOn; nl.Parent=bb
+
+            local dl=Instance.new("TextLabel")
+            dl.Name="DL"; dl.Size=UDim2.new(1,0,0.45,0)
+            dl.Position=UDim2.new(0,0,0.55,0)
+            dl.BackgroundTransparency=1; dl.Text=""
+            dl.TextColor3=CFG.C_ACCENT; dl.TextStrokeTransparency=0.3
+            dl.Font=Enum.Font.Gotham; dl.TextSize=10
+            dl.Visible=CFG.DistOn; dl.Parent=bb
+        end
+
+        local function mkESPFrame(zidx)
+            local f=Instance.new("Frame")
+            f.BackgroundTransparency=1; f.BorderSizePixel=0
+            f.ZIndex=zidx; f.Visible=false; f.Parent=SG
+            return f
+        end
+
+        local boxF=mkESPFrame(10); d.box=boxF; d.boxSides={}
+        for i=1,4 do
+            local s=Instance.new("Frame")
+            s.BackgroundColor3=CFG.C_ACCENT; s.BorderSizePixel=0
+            s.ZIndex=10; s.Parent=boxF; d.boxSides[i]=s
+        end
+
+        local hbf=Instance.new("Frame")
+        hbf.BackgroundColor3=Color3.fromRGB(20,20,20)
+        hbf.BackgroundTransparency=0.3; hbf.BorderSizePixel=0
+        hbf.ZIndex=11; hbf.Visible=false; hbf.Parent=SG; d.hbf=hbf
+        local hbFill=Instance.new("Frame")
+        hbFill.BackgroundColor3=CFG.C_GREEN; hbFill.BorderSizePixel=0
+        hbFill.ZIndex=12; hbFill.Parent=hbf; d.hbFill=hbFill
+
+        local trc=Instance.new("Frame")
+        trc.BackgroundColor3=CFG.C_ACCENT; trc.BackgroundTransparency=0.3
+        trc.BorderSizePixel=0; trc.AnchorPoint=Vector2.new(0.5,0)
+        trc.ZIndex=9; trc.Visible=false; trc.Parent=SG; d.trc=trc
+
+        for _,bone in ipairs(BONES) do
+            local l=Instance.new("Frame")
+            l.BackgroundColor3=CFG.C_ACCENT; l.BorderSizePixel=0
+            l.AnchorPoint=Vector2.new(0.5,0); l.ZIndex=8
+            l.Visible=false; l.Parent=SG
+            table.insert(d.bones,{line=l,b1=bone[1],b2=bone[2]})
+        end
+
+        task.spawn(function()
+            while ST.ESPData[p]==d and char.Parent and CFG.ESPOn do
+                local root=char:FindFirstChild("HumanoidRootPart")
+                local hum=char:FindFirstChildOfClass("Humanoid")
+                local myR=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+                if not root or not hum then task.wait(0.05); continue end
+
+                local col=CFG.C_ACCENT
+                if ST.Target and ST.Target.player==p then col=CFG.C_GREEN end
+                if hum.Health<=0 then col=CFG.C_RED end
+
+                d.hl.Enabled=CFG.ChamsOn; d.hl.OutlineColor=col; d.hl.FillColor=col
+
+                if d.bb then
+                    local nl=d.bb:FindFirstChild("NL"); local dl=d.bb:FindFirstChild("DL")
+                    if nl then nl.Visible=CFG.NameOn end
+                    if dl then
+                        dl.Visible=CFG.DistOn
+                        if CFG.DistOn and myR then
+                            dl.Text=math.floor((root.Position-myR.Position).Magnitude).."m"
+                        end
+                    end
+                end
+
+                local pts={"Head","UpperTorso","LowerTorso","LeftHand","RightHand","LeftFoot","RightFoot"}
+                local minX,minY,maxX,maxY=math.huge,math.huge,-math.huge,-math.huge
+                local allOn=true
+                for _,pn in ipairs(pts) do
+                    local pp=char:FindFirstChild(pn)
+                    if pp then
+                        local sp2,on2=CAM:WorldToViewportPoint(pp.Position)
+                        if not on2 then allOn=false; break end
+                        if sp2.X<minX then minX=sp2.X end
+                        if sp2.Y<minY then minY=sp2.Y end
+                        if sp2.X>maxX then maxX=sp2.X end
+                        if sp2.Y>maxY then maxY=sp2.Y end
+                    end
+                end
+
+                d.box.Visible=CFG.BoxOn and allOn
+                if CFG.BoxOn and allOn then
+                    local pad,t2=4,1.5
+                    local bx,by=minX-pad,minY-pad
+                    local bw,bh=(maxX-minX)+pad*2,(maxY-minY)+pad*2
+                    d.box.Position=UDim2.new(0,bx,0,by); d.box.Size=UDim2.new(0,bw,0,bh)
+                    local sides=d.boxSides
+                    sides[1].Position=UDim2.new(0,0,0,0);   sides[1].Size=UDim2.new(1,0,0,t2); sides[1].BackgroundColor3=col
+                    sides[2].Position=UDim2.new(0,0,1,-t2); sides[2].Size=UDim2.new(1,0,0,t2); sides[2].BackgroundColor3=col
+                    sides[3].Position=UDim2.new(0,0,0,0);   sides[3].Size=UDim2.new(0,t2,1,0); sides[3].BackgroundColor3=col
+                    sides[4].Position=UDim2.new(1,-t2,0,0); sides[4].Size=UDim2.new(0,t2,1,0); sides[4].BackgroundColor3=col
+                end
+
+                d.hbf.Visible=CFG.HealthOn and allOn
+                if CFG.HealthOn and allOn then
+                    local hp=math.clamp(hum.Health/math.max(hum.MaxHealth,1),0,1)
+                    d.hbf.Position=UDim2.new(0,minX-6,0,minY)
+                    d.hbf.Size=UDim2.new(0,4,0,maxY-minY)
+                    d.hbFill.Size=UDim2.new(1,0,hp,0)
+                    d.hbFill.Position=UDim2.new(0,0,1-hp,0)
+                    d.hbFill.BackgroundColor3=Color3.fromHSV(hp*0.33,1,1)
+                end
+
+                d.trc.Visible=CFG.TracerOn
+                if CFG.TracerOn then
+                    local sp2,on2=CAM:WorldToViewportPoint(root.Position)
+                    if on2 then
+                        local cx=CAM.ViewportSize.X/2; local cy=CAM.ViewportSize.Y
+                        local dx=sp2.X-cx; local dy=sp2.Y-cy
+                        local len=math.sqrt(dx*dx+dy*dy)
+                        d.trc.Position=UDim2.new(0,cx,0,cy)
+                        d.trc.Size=UDim2.new(0,len,0,1)
+                        d.trc.Rotation=math.deg(math.atan2(dy,dx))
+                        d.trc.BackgroundColor3=col
+                    else d.trc.Visible=false end
+                end
+
+                for _,bd in ipairs(d.bones) do
+                    bd.line.Visible=CFG.SkeleOn
+                    if CFG.SkeleOn then
+                        local p1=char:FindFirstChild(bd.b1); local p2=char:FindFirstChild(bd.b2)
+                        if p1 and p2 then
+                            local sp1,o1=CAM:WorldToViewportPoint(p1.Position)
+                            local sp2,o2=CAM:WorldToViewportPoint(p2.Position)
+                            if o1 and o2 then
+                                local dx=sp2.X-sp1.X; local dy=sp2.Y-sp1.Y
+                                local len=math.sqrt(dx*dx+dy*dy)
+                                bd.line.Position=UDim2.new(0,sp1.X,0,sp1.Y)
+                                bd.line.Size=UDim2.new(0,len,0,1.5)
+                                bd.line.Rotation=math.deg(math.atan2(dy,dx))
+                                bd.line.BackgroundColor3=col
+                            else bd.line.Visible=false end
+                        end
+                    end
+                end
+                task.wait(0)
+            end
+            ESP.remove(p)
+        end)
+    end
+
+    if p.Character then build(p.Character) end
+    p.CharacterAdded:Connect(build)
+end
+
+function ESP.enable()
+    ESP.disable()
+    for _,p in ipairs(PL:GetPlayers()) do if p~=LP then ESP.add(p) end end
+    PL.PlayerAdded:Connect(function(p) if p~=LP and CFG.ESPOn then ESP.add(p) end end)
+    PL.PlayerRemoving:Connect(ESP.remove)
+end
+
+function ESP.disable()
+    for p in pairs(ST.ESPData) do ESP.remove(p) end
+end
+
+-- ══════════════════════════════════════
+--  GUI HELPERS
+-- ══════════════════════════════════════
+local function corner(obj,r)
+    Instance.new("UICorner",obj).CornerRadius=r or UDim.new(0,6)
+end
+local function addStroke(obj,col,thick,alpha)
+    local s=Instance.new("UIStroke")
+    s.Color=col or CFG.C_BORDER; s.Thickness=thick or 1; s.Transparency=alpha or 0.4
+    s.Parent=obj; return s
+end
+local function tw(obj,props,t,style)
+    TS:Create(obj,TweenInfo.new(t or 0.2,style or Enum.EasingStyle.Quart),props):Play()
+end
+
+local function mkLabel(parent,props)
+    local l=Instance.new("TextLabel")
+    l.BackgroundTransparency=1; l.BorderSizePixel=0
+    for k,v in pairs(props) do if k~="P" then l[k]=v end end
+    if props.P then l.Parent=props.P end; return l
+end
+
+local function mkBtn(parent,props)
+    local b=Instance.new("TextButton")
+    b.BorderSizePixel=0; b.AutoButtonColor=false
+    for k,v in pairs(props) do if k~="P" and k~="R" then b[k]=v end end
+    if props.R then corner(b,props.R) end
+    if props.P then b.Parent=props.P end; return b
+end
+
+-- Switch touch-friendly
+local function mkSwitch(parent,cb)
+    local track=Instance.new("Frame")
+    track.Size=UDim2.new(0,42,0,24); track.BackgroundColor3=CFG.C_OFF
+    track.BorderSizePixel=0; track.Parent=parent; corner(track,UDim.new(1,0))
+    local thumb=Instance.new("Frame")
+    thumb.Size=UDim2.new(0,18,0,18); thumb.Position=UDim2.new(0,3,0.5,-9)
+    thumb.BackgroundColor3=Color3.fromRGB(120,120,140); thumb.BorderSizePixel=0
+    thumb.Parent=track; corner(thumb,UDim.new(1,0))
+    local on=false
+    local function set(v)
+        on=v
+        tw(track,{BackgroundColor3=on and CFG.C_ON or CFG.C_OFF})
+        tw(thumb,{
+            Position=on and UDim2.new(0,21,0.5,-9) or UDim2.new(0,3,0.5,-9),
+            BackgroundColor3=on and Color3.fromRGB(210,170,255) or Color3.fromRGB(120,120,140),
+        })
+        if cb then cb(on) end
+    end
+    local btn=mkBtn(track,{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=""})
+    btn.MouseButton1Click:Connect(function() set(not on) end)
+    return track,set
+end
+
+-- Slider touch-friendly com input numérico
+local function mkSlider(parent,lbl,min,max,default,order,cb)
+    local wrap=Instance.new("Frame")
+    wrap.Size=UDim2.new(1,0,0,56); wrap.BackgroundColor3=CFG.C_CARD
+    wrap.BorderSizePixel=0; wrap.LayoutOrder=order; wrap.Parent=parent; corner(wrap)
+
+    mkLabel(wrap,{
+        Size=UDim2.new(1,-80,0,20),Position=UDim2.new(0,10,0,6),
+        Text=lbl,TextColor3=CFG.C_TEXT,Font=Enum.Font.GothamMedium,
+        TextSize=11,TextXAlignment=Enum.TextXAlignment.Left,P=wrap,
+    })
+
+    local valBox=Instance.new("TextBox")
+    valBox.Size=UDim2.new(0,60,0,22); valBox.Position=UDim2.new(1,-68,0,5)
+    valBox.BackgroundColor3=Color3.fromRGB(28,28,42); valBox.BorderSizePixel=0
+    valBox.Text=tostring(default); valBox.TextColor3=CFG.C_ACCENT
+    valBox.Font=Enum.Font.GothamBold; valBox.TextSize=12
+    valBox.ClearTextOnFocus=true; valBox.Parent=wrap; corner(valBox,UDim.new(0,4))
+
+    local track=Instance.new("Frame")
+    track.Size=UDim2.new(1,-20,0,6); track.Position=UDim2.new(0,10,0,38)
+    track.BackgroundColor3=Color3.fromRGB(32,32,48); track.BorderSizePixel=0
+    track.Parent=wrap; corner(track,UDim.new(1,0))
+
+    local fill=Instance.new("Frame")
+    fill.Size=UDim2.new((default-min)/(max-min),0,1,0)
+    fill.BackgroundColor3=CFG.C_ACCENT; fill.BorderSizePixel=0
+    fill.Parent=track; corner(fill,UDim.new(1,0))
+
+    local knob=Instance.new("Frame")
+    knob.Size=UDim2.new(0,16,0,16); knob.AnchorPoint=Vector2.new(0.5,0.5)
+    knob.Position=UDim2.new((default-min)/(max-min),0,0.5,-8)
+    knob.BackgroundColor3=Color3.fromRGB(180,100,255); knob.BorderSizePixel=0
+    knob.ZIndex=3; knob.Parent=track; corner(knob,UDim.new(1,0))
+
+    local val=default; local drag=false
+
+    local function updateVal(v)
+        v=math.clamp(math.floor(v),min,max); val=v
+        local rel=(v-min)/(max-min)
+        fill.Size=UDim2.new(rel,0,1,0); knob.Position=UDim2.new(rel,0,0.5,-8)
+        valBox.Text=tostring(v); if cb then cb(v) end
+    end
+    local function fromX(x)
+        local rel=math.clamp((x-track.AbsolutePosition.X)/math.max(track.AbsoluteSize.X,1),0,1)
+        updateVal(min+rel*(max-min))
+    end
+
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.Touch
+        or i.UserInputType==Enum.UserInputType.MouseButton1 then
+            drag=true; fromX(i.Position.X)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if not drag then return end
+        if i.UserInputType==Enum.UserInputType.Touch
+        or i.UserInputType==Enum.UserInputType.MouseMovement then fromX(i.Position.X) end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.Touch
+        or i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end
+    end)
+    valBox.FocusLost:Connect(function()
+        local n=tonumber(valBox.Text); if n then updateVal(n) else valBox.Text=tostring(val) end
+    end)
+    return wrap
+end
+
+-- Row com switch
+local function mkRow(parent,labelTxt,order,cb)
+    local row=Instance.new("Frame")
+    row.Size=UDim2.new(1,0,0,38); row.BackgroundColor3=CFG.C_CARD
+    row.BorderSizePixel=0; row.LayoutOrder=order; row.Parent=parent; corner(row)
+    mkLabel(row,{
+        Size=UDim2.new(1,-60,1,0),Position=UDim2.new(0,12,0,0),
+        Text=labelTxt,TextColor3=CFG.C_TEXT,Font=Enum.Font.GothamMedium,
+        TextSize=11,TextXAlignment=Enum.TextXAlignment.Left,P=row,
+    })
+    local sw,setFn=mkSwitch(row,cb); sw.Position=UDim2.new(1,-50,0.5,-12)
+    return row,setFn
+end
+
+local function mkSection(parent,txt,order)
+    local f=Instance.new("Frame")
+    f.Size=UDim2.new(1,0,0,20); f.BackgroundTransparency=1
+    f.LayoutOrder=order; f.Parent=parent
+    mkLabel(f,{Size=UDim2.new(1,0,1,0),Text=txt,TextColor3=CFG.C_ACCENT,
+        Font=Enum.Font.GothamBold,TextSize=10,TextXAlignment=Enum.TextXAlignment.Left,P=f})
+    return f
+end
+
+local function mkSep(parent,order)
+    local f=Instance.new("Frame"); f.Size=UDim2.new(1,0,0,1)
+    f.BackgroundColor3=Color3.fromRGB(35,35,52); f.BorderSizePixel=0
+    f.LayoutOrder=order; f.Parent=parent; return f
+end
+
+-- Info card
+local function mkInfoCard(parent,text,order,color)
+    local f=Instance.new("Frame")
+    f.Size=UDim2.new(1,0,0,46); f.BackgroundColor3=CFG.C_CARD
+    f.BorderSizePixel=0; f.LayoutOrder=order; f.Parent=parent; corner(f)
+    mkLabel(f,{
+        Size=UDim2.new(1,-16,1,0),Position=UDim2.new(0,8,0,0),
+        Text=text,TextColor3=color or CFG.C_TEXT,Font=Enum.Font.GothamMedium,
+        TextSize=10,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,
+        TextYAlignment=Enum.TextYAlignment.Center,P=f,
+    })
+    return f
+end
+
+-- ══════════════════════════════════════
+--  PAINEL
+-- ══════════════════════════════════════
+local PW,PH = 260,420
+
+local panel=Instance.new("Frame")
+panel.Name="Panel"; panel.Size=UDim2.new(0,PW,0,PH)
+panel.Position=UDim2.new(0,8,0.5,-(PH/2))
+panel.BackgroundColor3=CFG.C_BG; panel.BorderSizePixel=0
+panel.ClipsDescendants=true; panel.Parent=SG; corner(panel,UDim.new(0,10))
+addStroke(panel,CFG.C_BORDER,1,0.3)
+
+-- Header
+local header=Instance.new("Frame")
+header.Name="Header"; header.Size=UDim2.new(1,0,0,48)
+header.BackgroundColor3=CFG.C_PANEL; header.BorderSizePixel=0; header.Parent=panel
+corner(header,UDim.new(0,10))
+local hfix=Instance.new("Frame"); hfix.Size=UDim2.new(1,0,0.5,0)
+hfix.Position=UDim2.new(0,0,0.5,0); hfix.BackgroundColor3=CFG.C_PANEL
+hfix.BorderSizePixel=0; hfix.Parent=header
+
+-- Ícone
+local iconBg=Instance.new("Frame"); iconBg.Size=UDim2.new(0,30,0,30)
+iconBg.Position=UDim2.new(0,10,0.5,-15); iconBg.BackgroundColor3=CFG.C_ACCENT
+iconBg.BorderSizePixel=0; iconBg.Parent=header; corner(iconBg,UDim.new(0,7))
+mkLabel(iconBg,{Size=UDim2.new(1,0,1,0),Text="◎",TextColor3=Color3.fromRGB(255,255,255),
+    Font=Enum.Font.GothamBlack,TextSize=15,P=iconBg})
+
+mkLabel(header,{Size=UDim2.new(0,130,0,18),Position=UDim2.new(0,48,0,7),
+    Text="Simple Aim  V6",TextColor3=Color3.fromRGB(230,230,255),
+    Font=Enum.Font.GothamBlack,TextSize=13,TextXAlignment=Enum.TextXAlignment.Left,P=header})
+
+mkLabel(header,{Size=UDim2.new(0,150,0,14),Position=UDim2.new(0,48,0,26),
+    Text=GAME_CFG.name.." • Mobile",TextColor3=CFG.C_SUBTEXT,
+    Font=Enum.Font.Gotham,TextSize=9,TextXAlignment=Enum.TextXAlignment.Left,P=header})
+
+-- FPS label no header
+fpsLabel=mkLabel(header,{
+    Size=UDim2.new(0,55,0,14),Position=UDim2.new(1,-100,0,10),
+    Text="FPS: --",TextColor3=CFG.C_GREEN,
+    Font=Enum.Font.GothamBold,TextSize=10,
+    TextXAlignment=Enum.TextXAlignment.Right,P=header,
+})
+
+-- Botão fechar
+local closeB=mkBtn(header,{
+    Size=UDim2.new(0,30,0,30),Position=UDim2.new(1,-36,0.5,-15),
+    BackgroundColor3=Color3.fromRGB(50,18,70),Text="✕",
+    TextColor3=CFG.C_SUBTEXT,Font=Enum.Font.GothamBold,TextSize=13,
+    R=UDim.new(0,7),P=header,
+})
+
+-- ──────────────────────────────────────
+--  TAB BAR
+-- ──────────────────────────────────────
+local tabBar=Instance.new("Frame")
+tabBar.Size=UDim2.new(1,0,0,38); tabBar.Position=UDim2.new(0,0,0,48)
+tabBar.BackgroundColor3=CFG.C_PANEL; tabBar.BorderSizePixel=0; tabBar.Parent=panel
+
+local TABS     = {"AIM","ESP","FPS","JOGO"}
+local tabBtns  = {}
+local tabPages = {}
+local tabW     = PW/#TABS
+
+local tabInd=Instance.new("Frame"); tabInd.Size=UDim2.new(0,tabW-12,0,2)
+tabInd.Position=UDim2.new(0,6,1,-2); tabInd.BackgroundColor3=CFG.C_ACCENT
+tabInd.BorderSizePixel=0; tabInd.ZIndex=5; tabInd.Parent=tabBar; corner(tabInd,UDim.new(1,0))
+
+for i,name in ipairs(TABS) do
+    local tb=mkBtn(tabBar,{
+        Size=UDim2.new(0,tabW,1,0),Position=UDim2.new(0,(i-1)*tabW,0,0),
+        BackgroundTransparency=1,Text=name,TextColor3=CFG.C_SUBTEXT,
+        Font=Enum.Font.GothamBold,TextSize=10,
+    })
+    tabBtns[name]=tb
+
+    local page=Instance.new("ScrollingFrame")
+    page.Size=UDim2.new(1,0,1,-86); page.Position=UDim2.new(0,0,0,86)
+    page.BackgroundTransparency=1; page.BorderSizePixel=0
+    page.ScrollBarThickness=2; page.ScrollBarImageColor3=CFG.C_ACCENT
+    page.CanvasSize=UDim2.new(0,0,0,0); page.AutomaticCanvasSize=Enum.AutomaticSize.Y
+    page.Visible=false; page.Parent=panel; tabPages[name]=page
+
+    local lay=Instance.new("UIListLayout"); lay.SortOrder=Enum.SortOrder.LayoutOrder
+    lay.Padding=UDim.new(0,4); lay.Parent=page
+    local pad=Instance.new("UIPadding"); pad.PaddingLeft=UDim.new(0,8)
+    pad.PaddingRight=UDim.new(0,8); pad.PaddingTop=UDim.new(0,8)
+    pad.PaddingBottom=UDim.new(0,8); pad.Parent=page
+end
+
+local function switchTab(name)
+    ST.Tab=name
+    for n,pg in pairs(tabPages) do pg.Visible=(n==name) end
+    for n,tb in pairs(tabBtns)  do
+        tw(tb,{TextColor3=n==name and CFG.C_ACCENT or CFG.C_SUBTEXT})
+    end
+    for i,n in ipairs(TABS) do
+        if n==name then
+            tw(tabInd,{Position=UDim2.new(0,(i-1)*tabW+6,1,-2)})
+        end
+    end
+end
+for _,name in ipairs(TABS) do
+    tabBtns[name].MouseButton1Click:Connect(function() switchTab(name) end)
+end
+
+-- ══════════════════════════════════════
+--  ABA AIM
+-- ══════════════════════════════════════
+local AP=tabPages["AIM"]
+
+local aimBtn=mkBtn(AP,{
+    Size=UDim2.new(1,0,0,42),BackgroundColor3=Color3.fromRGB(28,14,46),
+    Text="AIMBOT   OFF",TextColor3=CFG.C_SUBTEXT,Font=Enum.Font.GothamBlack,
+    TextSize=14,LayoutOrder=1,R=UDim.new(0,6),P=AP,
+}); addStroke(aimBtn,CFG.C_BORDER,1,0.4)
+
+aimBtn.MouseButton1Click:Connect(function()
+    CFG.AimOn=not CFG.AimOn
+    if CFG.AimOn then
+        tw(aimBtn,{BackgroundColor3=Color3.fromRGB(60,18,100)})
+        aimBtn.TextColor3=CFG.C_ACCENT; aimBtn.Text="AIMBOT   ON"
+        if CFG.ShowFOV then makeFOV() end
+    else
+        tw(aimBtn,{BackgroundColor3=Color3.fromRGB(28,14,46)})
+        aimBtn.TextColor3=CFG.C_SUBTEXT; aimBtn.Text="AIMBOT   OFF"
+        removeFOV()
+    end
+end)
+
+mkSep(AP,2); mkSection(AP,"  MIRA",3)
+mkRow(AP,"Atirar na Cabeça",4,function(e) CFG.Part=e and "Head" or "HumanoidRootPart" end)
+mkSep(AP,5); mkSection(AP,"  AJUSTES",6)
+mkSlider(AP,"FOV",50,500,180,7,function(v) CFG.FOV=v; resizeFOV() end)
+mkSlider(AP,"Suavização %",0,95,20,8,function(v) CFG.Smooth=v/100 end)
+mkSlider(AP,"Predição",1,30,8,9,function(v) CFG.PredMult=v/100 end)
+mkSep(AP,10); mkSection(AP,"  EXTRAS",11)
+mkRow(AP,"Predição de Movimento",12,function(e) CFG.Predict=e end)
+mkRow(AP,"Só com Scope",13,function(e) CFG.ScopeOnly=e end)
+mkRow(AP,"Wall Check",14,function(e) CFG.WallCheck=e end)
+mkSep(AP,15); mkSection(AP,"  LEGIT MODE",16)
+mkRow(AP,"Modo Legit",17,function(e) CFG.LegitMode=e end)
+mkSlider(AP,"Chance de Acerto %",10,100,75,18,function(v) CFG.HitChance=v end)
+mkSep(AP,19); mkSection(AP,"  FOV VISUAL",20)
+mkRow(AP,"Mostrar FOV",21,function(e)
+    CFG.ShowFOV=e
+    if e and CFG.AimOn then makeFOV() elseif not e then removeFOV() end
+end)
+mkSlider(AP,"Transparência FOV %",0,90,15,22,function(v)
+    CFG.FOVAlpha=v/100
+    if ST.FOVStroke then ST.FOVStroke.Transparency=CFG.FOVAlpha end
+end)
+
+-- ══════════════════════════════════════
+--  ABA ESP
+-- ══════════════════════════════════════
+local EP=tabPages["ESP"]
+
+local espBtn=mkBtn(EP,{
+    Size=UDim2.new(1,0,0,42),BackgroundColor3=Color3.fromRGB(28,14,46),
+    Text="ESP   OFF",TextColor3=CFG.C_SUBTEXT,Font=Enum.Font.GothamBlack,
+    TextSize=14,LayoutOrder=1,R=UDim.new(0,6),P=EP,
+}); addStroke(espBtn,CFG.C_BORDER,1,0.4)
+
+espBtn.MouseButton1Click:Connect(function()
+    CFG.ESPOn=not CFG.ESPOn
+    if CFG.ESPOn then
+        tw(espBtn,{BackgroundColor3=Color3.fromRGB(60,18,100)})
+        espBtn.TextColor3=CFG.C_ACCENT; espBtn.Text="ESP   ON"
+        ESP.enable()
+    else
+        tw(espBtn,{BackgroundColor3=Color3.fromRGB(28,14,46)})
+        espBtn.TextColor3=CFG.C_SUBTEXT; espBtn.Text="ESP   OFF"
+        ESP.disable()
+    end
+end)
+
+mkSep(EP,2); mkSection(EP,"  TIPOS",3)
+mkRow(EP,"Chams (Highlight)",4,function(e)
+    CFG.ChamsOn=e; for _,d in pairs(ST.ESPData) do if d.hl then d.hl.Enabled=e end end
+end)
+mkRow(EP,"Box 2D",5,function(e)
+    CFG.BoxOn=e; for _,d in pairs(ST.ESPData) do if d.box then d.box.Visible=e end end
+end)
+mkRow(EP,"Skeleton",6,function(e)
+    CFG.SkeleOn=e
+    for _,d in pairs(ST.ESPData) do
+        for _,b in ipairs(d.bones or {}) do b.line.Visible=e end
+    end
+end)
+mkRow(EP,"Barra de Vida",7,function(e)
+    CFG.HealthOn=e; for _,d in pairs(ST.ESPData) do if d.hbf then d.hbf.Visible=e end end
+end)
+mkRow(EP,"Nome",8,function(e)
+    CFG.NameOn=e
+    for _,d in pairs(ST.ESPData) do
+        if d.bb then local nl=d.bb:FindFirstChild("NL"); if nl then nl.Visible=e end end
+    end
+end)
+mkRow(EP,"Distância",9,function(e)
+    CFG.DistOn=e
+    for _,d in pairs(ST.ESPData) do
+        if d.bb then local dl=d.bb:FindFirstChild("DL"); if dl then dl.Visible=e end end
+    end
+end)
+mkRow(EP,"Tracer",10,function(e)
+    CFG.TracerOn=e; for _,d in pairs(ST.ESPData) do if d.trc then d.trc.Visible=e end end
+end)
+
+-- ══════════════════════════════════════
+--  ABA FPS
+-- ══════════════════════════════════════
+local FP=tabPages["FPS"]
+
+-- Card contador FPS
+local fpsCard=Instance.new("Frame")
+fpsCard.Size=UDim2.new(1,0,0,60); fpsCard.BackgroundColor3=CFG.C_CARD
+fpsCard.BorderSizePixel=0; fpsCard.LayoutOrder=1; fpsCard.Parent=FP; corner(fpsCard)
+
+mkLabel(fpsCard,{Size=UDim2.new(0.5,0,1,0),Position=UDim2.new(0,12,0,0),
+    Text="FPS Atual",TextColor3=CFG.C_SUBTEXT,Font=Enum.Font.GothamMedium,
+    TextSize=11,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Center,P=fpsCard})
+
+local bigFPS=mkLabel(fpsCard,{Size=UDim2.new(0.5,0,1,0),Position=UDim2.new(0.5,0,0,0),
+    Text="--",TextColor3=CFG.C_GREEN,Font=Enum.Font.GothamBlack,TextSize=28,P=fpsCard})
+
+-- Atualizar big FPS
+RS.Heartbeat:Connect(function()
+    if bigFPS then
+        local fps=ST.FPS; bigFPS.Text=tostring(fps)
+        bigFPS.TextColor3=fps<30 and CFG.C_RED or fps<50 and CFG.C_YELLOW or CFG.C_GREEN
+    end
+end)
+
+mkSep(FP,2); mkSection(FP,"  FPS BOOST",3)
+
+local fpsBoostBtn=mkBtn(FP,{
+    Size=UDim2.new(1,0,0,42),BackgroundColor3=Color3.fromRGB(28,14,46),
+    Text="FPS BOOST   OFF",TextColor3=CFG.C_SUBTEXT,Font=Enum.Font.GothamBlack,
+    TextSize=13,LayoutOrder=4,R=UDim.new(0,6),P=FP,
+}); addStroke(fpsBoostBtn,CFG.C_BORDER,1,0.4)
+
+fpsBoostBtn.MouseButton1Click:Connect(function()
+    CFG.FPSBoostOn=not CFG.FPSBoostOn
+    if CFG.FPSBoostOn then
+        tw(fpsBoostBtn,{BackgroundColor3=Color3.fromRGB(60,18,100)})
+        fpsBoostBtn.TextColor3=CFG.C_ACCENT; fpsBoostBtn.Text="FPS BOOST   ON"
+        FPSBoost.apply(CFG.FPSLevel)
+    else
+        tw(fpsBoostBtn,{BackgroundColor3=Color3.fromRGB(28,14,46)})
+        fpsBoostBtn.TextColor3=CFG.C_SUBTEXT; fpsBoostBtn.Text="FPS BOOST   OFF"
+        FPSBoost.restore()
+    end
+end)
+
+mkSep(FP,5); mkSection(FP,"  NÍVEL DE OTIMIZAÇÃO",6)
+
+-- Nível leve/médio/máximo
+local levelNames={"Leve","Médio","Máximo"}
+local levelBtns={}
+
+local levelRow=Instance.new("Frame")
+levelRow.Size=UDim2.new(1,0,0,38); levelRow.BackgroundTransparency=1
+levelRow.LayoutOrder=7; levelRow.Parent=FP
+
+for i,lvl in ipairs(levelNames) do
+    local lbtn=mkBtn(levelRow,{
+        Size=UDim2.new(0,(PW-36)/3,0,38),
+        Position=UDim2.new(0,((i-1)*((PW-36)/3+4)),0,0),
+        BackgroundColor3=i==1 and Color3.fromRGB(60,18,100) or CFG.C_CARD,
+        Text=lvl,TextColor3=i==1 and CFG.C_ACCENT or CFG.C_SUBTEXT,
+        Font=Enum.Font.GothamBold,TextSize=10,R=UDim.new(0,6),P=levelRow,
+    })
+    levelBtns[i]=lbtn
+
+    lbtn.MouseButton1Click:Connect(function()
+        CFG.FPSLevel=i
+        for j,b in ipairs(levelBtns) do
+            tw(b,{BackgroundColor3=j==i and Color3.fromRGB(60,18,100) or CFG.C_CARD})
+            b.TextColor3=j==i and CFG.C_ACCENT or CFG.C_SUBTEXT
+        end
+        if CFG.FPSBoostOn then FPSBoost.apply(i) end
+    end)
+end
+
+mkSep(FP,8); mkSection(FP,"  OTIMIZAÇÕES INDIVIDUAIS",9)
+
+mkRow(FP,"Remover Sombras",10,function(e)
+    LIGHT.GlobalShadows=not e
+end)
+mkRow(FP,"Remover Partículas",11,function(e)
+    for _,obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") then obj.Enabled=not e end
+    end
+end)
+mkRow(FP,"Remover Decals",12,function(e)
+    for _,obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Decal") then obj.Transparency=e and 1 or 0 end
+    end
+end)
+mkRow(FP,"Qualidade Baixa",13,function(e)
+    settings().Rendering.QualityLevel=e and Enum.QualityLevel.Level01 or Enum.QualityLevel.Level10
+end)
+mkRow(FP,"Remover Névoa",14,function(e)
+    LIGHT.FogEnd=e and 100000 or 1000; LIGHT.FogStart=e and 99999 or 900
+end)
+
+-- ══════════════════════════════════════
+--  ABA JOGO
+-- ══════════════════════════════════════
+local JP=tabPages["JOGO"]
+
+-- Info do jogo detectado
+local gameColor = GAME_CFG.name=="Desconhecido" and CFG.C_YELLOW or CFG.C_GREEN
+mkInfoCard(JP,"🎮  "..GAME_CFG.name.."\nID: "..pid,1,gameColor)
+
+mkSep(JP,2); mkSection(JP,"  ANTI-RECOIL",3)
+
+local recoilBtn=mkBtn(JP,{
+    Size=UDim2.new(1,0,0,42),BackgroundColor3=Color3.fromRGB(28,14,46),
+    Text="ANTI-RECOIL   OFF",TextColor3=CFG.C_SUBTEXT,Font=Enum.Font.GothamBlack,
+    TextSize=13,LayoutOrder=4,R=UDim.new(0,6),P=JP,
+}); addStroke(recoilBtn,CFG.C_BORDER,1,0.4)
+
+recoilBtn.MouseButton1Click:Connect(function()
+    CFG.RecoilOn=not CFG.RecoilOn
+    if CFG.RecoilOn then
+        tw(recoilBtn,{BackgroundColor3=Color3.fromRGB(60,18,100)})
+        recoilBtn.TextColor3=CFG.C_ACCENT; recoilBtn.Text="ANTI-RECOIL   ON"
+        startRecoil()
+    else
+        tw(recoilBtn,{BackgroundColor3=Color3.fromRGB(28,14,46)})
+        recoilBtn.TextColor3=CFG.C_SUBTEXT; recoilBtn.Text="ANTI-RECOIL   OFF"
+        stopRecoil()
+    end
+end)
+
+mkSlider(JP,"Recoil Vertical",0,30,8,5,function(v) CFG.RecoilY=v end)
+mkSlider(JP,"Recoil Horizontal",-15,15,0,6,function(v) CFG.RecoilX=v end)
+
+mkSep(JP,7); mkSection(JP,"  BULLET DROP",8)
+
+mkRow(JP,"Compensar Bullet Drop",9,function(e) CFG.DropOn=e end)
+mkSlider(JP,"Compensação",1,20,5,10,function(v) CFG.DropAmount=v end)
+
+mkSep(JP,11); mkSection(JP,"  PRESETS POR JOGO",12)
+
+-- Preset automático baseado no jogo detectado
+if GAME_CFG.recoil or GAME_CFG.drop then
+    local presetCard=mkInfoCard(JP,
+        "Jogo com recoil detectado!\nClique para aplicar preset.",13,CFG.C_YELLOW)
+
+    local presetBtn=mkBtn(JP,{
+        Size=UDim2.new(1,0,0,38),BackgroundColor3=Color3.fromRGB(50,30,0),
+        Text="Aplicar Preset: "..GAME_CFG.name,TextColor3=CFG.C_YELLOW,
+        Font=Enum.Font.GothamBold,TextSize=11,LayoutOrder=14,R=UDim.new(0,6),P=JP,
+    }); addStroke(presetBtn,CFG.C_YELLOW,1,0.5)
+
+    presetBtn.MouseButton1Click:Connect(function()
+        -- Aplicar configurações recomendadas
+        CFG.AimOn    = true
+        CFG.Smooth   = 0.12
+        CFG.Predict  = true
+        CFG.PredMult = 0.08
+        CFG.RecoilOn = GAME_CFG.recoil
+        CFG.DropOn   = GAME_CFG.drop
+        CFG.RecoilY  = 8
+        CFG.RecoilX  = 0
+
+        aimBtn.Text="AIMBOT   ON"; aimBtn.TextColor3=CFG.C_ACCENT
+        tw(aimBtn,{BackgroundColor3=Color3.fromRGB(60,18,100)})
+        if CFG.ShowFOV then makeFOV() end
+
+        if CFG.RecoilOn then
+            recoilBtn.Text="ANTI-RECOIL   ON"; recoilBtn.TextColor3=CFG.C_ACCENT
+            tw(recoilBtn,{BackgroundColor3=Color3.fromRGB(60,18,100)})
+            startRecoil()
+        end
+
+        tw(presetBtn,{BackgroundColor3=Color3.fromRGB(30,60,10)})
+        presetBtn.TextColor3=CFG.C_GREEN
+        presetBtn.Text="✓ Preset Aplicado!"
+    end)
+else
+    mkInfoCard(JP,"Jogo sem recoil detectado.\nSem preset disponível.",13,CFG.C_SUBTEXT)
+end
+
+mkSep(JP,15); mkSection(JP,"  DESATIVAR TUDO",16)
+
+local resetBtn=mkBtn(JP,{
+    Size=UDim2.new(1,0,0,38),BackgroundColor3=Color3.fromRGB(50,12,12),
+    Text="Desativar Tudo",TextColor3=CFG.C_RED,Font=Enum.Font.GothamBold,
+    TextSize=12,LayoutOrder=17,R=UDim.new(0,6),P=JP,
+})
+resetBtn.MouseButton1Click:Connect(function()
+    CFG.AimOn=false; CFG.ESPOn=false; CFG.RecoilOn=false
+    CFG.DropOn=false; CFG.FPSBoostOn=false
+    removeFOV(); ESP.disable(); stopRecoil(); FPSBoost.restore()
+    aimBtn.Text="AIMBOT   OFF"; aimBtn.TextColor3=CFG.C_SUBTEXT
+    tw(aimBtn,{BackgroundColor3=Color3.fromRGB(28,14,46)})
+    espBtn.Text="ESP   OFF"; espBtn.TextColor3=CFG.C_SUBTEXT
+    tw(espBtn,{BackgroundColor3=Color3.fromRGB(28,14,46)})
+    recoilBtn.Text="ANTI-RECOIL   OFF"; recoilBtn.TextColor3=CFG.C_SUBTEXT
+    tw(recoilBtn,{BackgroundColor3=Color3.fromRGB(28,14,46)})
+    fpsBoostBtn.Text="FPS BOOST   OFF"; fpsBoostBtn.TextColor3=CFG.C_SUBTEXT
+    tw(fpsBoostBtn,{BackgroundColor3=Color3.fromRGB(28,14,46)})
+end)
+
+-- ══════════════════════════════════════
+--  DRAG TOUCH + MOUSE
+-- ══════════════════════════════════════
+do
+    local dragging=false; local touchId=nil
+    local startInput=nil; local startPos=nil
+
+    local function beginDrag(pos)
+        dragging=true; startInput=pos; startPos=panel.Position
+    end
+    local function moveDrag(pos)
+        if not dragging then return end
+        local d=pos-startInput
+        panel.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,
+            startPos.Y.Scale,startPos.Y.Offset+d.Y)
+    end
+    local function endDrag() dragging=false; touchId=nil end
+
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.Touch and not touchId then
+            touchId=input; beginDrag(Vector2.new(input.Position.X,input.Position.Y))
+        elseif input.UserInputType==Enum.UserInputType.MouseButton1 then
+            beginDrag(Vector2.new(input.Position.X,input.Position.Y))
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.Touch and input==touchId then
+            moveDrag(Vector2.new(input.Position.X,input.Position.Y))
+        elseif input.UserInputType==Enum.UserInputType.MouseMovement then
+            moveDrag(Vector2.new(input.Position.X,input.Position.Y))
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if (input.UserInputType==Enum.UserInputType.Touch and input==touchId)
+        or input.UserInputType==Enum.UserInputType.MouseButton1 then endDrag() end
+    end)
+end
+
+-- ══════════════════════════════════════
+--  BOTÃO FLUTUANTE (FAB)
+-- ══════════════════════════════════════
+local fab=Instance.new("TextButton")
+fab.Size=UDim2.new(0,44,0,44); fab.Position=UDim2.new(0,8,0,8)
+fab.BackgroundColor3=CFG.C_PANEL; fab.BorderSizePixel=0
+fab.Text="◎"; fab.TextColor3=CFG.C_ACCENT
+fab.Font=Enum.Font.GothamBlack; fab.TextSize=20
+fab.AutoButtonColor=false; fab.ZIndex=30; fab.Visible=false; fab.Parent=SG
+corner(fab,UDim.new(0,10)); addStroke(fab,CFG.C_BORDER,1,0.3)
+
+local panelOpen=true
+
+local function closePanel()
+    panelOpen=false
+    tw(panel,{Position=UDim2.new(panel.Position.X.Scale,panel.Position.X.Offset-20,
+        panel.Position.Y.Scale,panel.Position.Y.Offset),BackgroundTransparency=1},0.22)
+    task.delay(0.23,function() if not panelOpen then panel.Visible=false end end)
+end
+
+local function openPanel()
+    panelOpen=true; panel.Visible=true; panel.BackgroundTransparency=1
+    local ox=panel.Position.X.Offset; local oy=panel.Position.Y.Offset
+    panel.Position=UDim2.new(panel.Position.X.Scale,ox-20,panel.Position.Y.Scale,oy)
+    tw(panel,{BackgroundTransparency=0,
+        Position=UDim2.new(panel.Position.X.Scale,ox,panel.Position.Y.Scale,oy)},
+        0.25,Enum.EasingStyle.Back)
+end
+
+closeB.MouseButton1Click:Connect(function()
+    if panelOpen then closePanel() else openPanel() end
+end)
+fab.MouseButton1Click:Connect(function() fab.Visible=false; openPanel() end)
+
+task.spawn(function()
+    while true do task.wait(0.1); fab.Visible=not panelOpen end
+end)
+
+-- Drag FAB
+do
+    local drag=false; local tid=nil; local si=nil; local sp2=nil; local moved=false
+    fab.InputBegan:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.Touch and not tid then
+            tid=input; drag=true; moved=false
+            si=Vector2.new(input.Position.X,input.Position.Y); sp2=fab.Position
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if drag and input==tid then
+            local d=Vector2.new(input.Position.X,input.Position.Y)-si
+            if d.Magnitude>5 then moved=true end
+            fab.Position=UDim2.new(sp2.X.Scale,sp2.X.Offset+d.X,sp2.Y.Scale,sp2.Y.Offset+d.Y)
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input==tid then
+            drag=false; tid=nil
+            if not moved then fab.Visible=false; openPanel() end
+        end
+    end)
+end
+
+-- ══════════════════════════════════════
+--  ANIMAÇÃO ENTRADA
+-- ══════════════════════════════════════
+panel.BackgroundTransparency=1
+panel.Position=UDim2.new(0,-20,0.5,-(PH/2))
+task.wait(0.15)
+tw(panel,{BackgroundTransparency=0,Position=UDim2.new(0,8,0.5,-(PH/2))},0.4,Enum.EasingStyle.Back)
+
+-- ══════════════════════════════════════
+--  LOOP PRINCIPAL
+-- ══════════════════════════════════════
+RS:BindToRenderStep("SAimV6",300,function()
+    aimUpdate()
+    if ST.FOVStroke then
+        ST.FOVStroke.Transparency = ST.Locked
+            and math.max(0, CFG.FOVAlpha - math.abs(math.sin(tick()*4))*0.2)
+            or CFG.FOVAlpha
+    end
+end)
+
+switchTab("AIM")
+print("✅ Simple Aim V6 Mobile | Jogo: "..GAME_CFG.name)
